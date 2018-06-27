@@ -1,6 +1,7 @@
 package com.exzy.oneononearteleconference;
 
 import android.content.Intent;
+import android.graphics.SurfaceTexture;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbManager;
 import android.os.Bundle;
@@ -9,6 +10,7 @@ import android.support.v7.app.AppCompatActivity;
 import android.util.Log;
 import android.view.MenuItem;
 import android.view.MotionEvent;
+import android.view.Surface;
 import android.view.SurfaceView;
 import android.view.View;
 import android.view.WindowManager;
@@ -63,6 +65,11 @@ public class MainActivity extends AppCompatActivity implements CvCameraViewListe
     Mat kernel;
     boolean DEBUG = true;
 
+    private static final boolean USE_SURFACE_ENCODER = false;
+    private static final int PREVIEW_WIDTH = 640;
+    private static final int PREVIEW_HEIGHT = 480;
+    private static final int PREVIEW_MODE = 1;
+
 
 
     private BaseLoaderCallback mLoaderCallback = new BaseLoaderCallback(this) {
@@ -109,9 +116,12 @@ public class MainActivity extends AppCompatActivity implements CvCameraViewListe
 
         mOpenCvCameraView.setCvCameraViewListener(this);
 
+        mUVCCameraView = findViewById(R.id.camera_view);
+        mUVCCameraView.setAspectRatio(PREVIEW_WIDTH / (float)PREVIEW_HEIGHT);
+
         mUSBMonitor = new USBMonitor(this, mOnDeviceConnectListener);
-        /*mCameraHandler = UVCCameraHandlerMultiSurface.createHandler(this, mOpenCvCameraView,
-                USE_SURFACE_ENCODER ? 0:1, PREVIEW_WIDTH, PREVIEW_HEIGHT, PREVIEW_MODE);*/
+        mCameraHandler = UVCCameraHandlerMultiSurface.createHandler(this, mUVCCameraView,
+                USE_SURFACE_ENCODER ? 0:1, PREVIEW_WIDTH, PREVIEW_HEIGHT, PREVIEW_MODE);
 
     }
 
@@ -120,6 +130,19 @@ public class MainActivity extends AppCompatActivity implements CvCameraViewListe
         super.onPause();
         if (mOpenCvCameraView != null)
             mOpenCvCameraView.disableView();
+    }
+
+    @Override
+    public void onStart(){
+        super.onStart();
+        mUSBMonitor.register();
+    }
+
+    @Override
+    public void onStop(){
+        stopPreview();
+        mCameraHandler.close();
+        super.onStop();
     }
 
     @Override
@@ -138,6 +161,18 @@ public class MainActivity extends AppCompatActivity implements CvCameraViewListe
         super.onDestroy();
         if (mOpenCvCameraView != null)
             mOpenCvCameraView.disableView();
+
+        if (mCameraHandler != null) {
+	        mCameraHandler.release();
+	        mCameraHandler = null;
+        }
+        if (mUSBMonitor != null) {
+	        mUSBMonitor.destroy();
+	        mUSBMonitor = null;
+        }
+        mUVCCameraView = null;
+        super.onDestroy();
+
     }
 
     public void onCameraViewStarted(int width, int height) {
@@ -166,6 +201,18 @@ public class MainActivity extends AppCompatActivity implements CvCameraViewListe
         return false;
     }
 
+    private int mPreviewSurfaceId;
+
+
+    private void stopPreview() {
+        if (DEBUG) Log.v(TAG, "stopPreview:");
+        if (mPreviewSurfaceId != 0) {
+            mCameraHandler.removeSurface(mPreviewSurfaceId);
+            mPreviewSurfaceId = 0;
+        }
+        mCameraHandler.close();
+    }
+
 
 
     /* ========================================================================================
@@ -184,6 +231,15 @@ public class MainActivity extends AppCompatActivity implements CvCameraViewListe
         public void onConnect(final UsbDevice device,
                               final UsbControlBlock ctrlBlock, final boolean createNew) {
             if (DEBUG) Log.v(TAG, "onDisconnect:");
+            mCameraHandler.open(ctrlBlock);
+			if (!mCameraHandler.isOpened()) {
+			    mCameraHandler.startPreview();
+				mCameraHandler.open(ctrlBlock);
+				final SurfaceTexture st = mUVCCameraView.getSurfaceTexture();
+				final Surface surface = new Surface(st);
+				mPreviewSurfaceId = surface.hashCode();
+				mCameraHandler.addSurface(mPreviewSurfaceId, surface, false);
+				}
         }
 
         @Override
@@ -191,6 +247,9 @@ public class MainActivity extends AppCompatActivity implements CvCameraViewListe
                                  final UsbControlBlock ctrlBlock) {
 
             if (DEBUG) Log.v(TAG, "onDisconnect:");
+            if (mCameraHandler != null) {
+                stopPreview();
+                }
         }
         @Override
         public void onDettach(final UsbDevice device) {
